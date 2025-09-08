@@ -19,6 +19,7 @@ import "@livekit/components-styles";
 export default function SellerDashboard() {
   const { user, logout } = useAuth();
   const socketRef = useRef(null);
+  const cleanupTimeoutRef = useRef(null); // Prevent double cleanup
 
   const [isShopOpen, setIsShopOpen] = useState(() => sessionStorage.getItem("isShopOpen") === "true");
   const [incomingCall, setIncomingCall] = useState(null);
@@ -109,16 +110,33 @@ export default function SellerDashboard() {
 
     return () => {
       socketRef.current?.close();
+      if (cleanupTimeoutRef.current) {
+        clearTimeout(cleanupTimeoutRef.current);
+      }
       if (activeCall) endCallProperly();
     };
   }, [isShopOpen, activeCall]);
 
-  // --- Unified Call Cleanup (UI only) ---
+  // --- Unified Call Cleanup (with timeout clear) ---
   const endCallProperly = () => {
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+
     setActiveCall(null);
     setLivekitToken(null);
     setIncomingCall(null);
     toast.dismiss("call");
+
+    // Cleanup video tracks
+    const videos = document.querySelectorAll("video");
+    videos.forEach(video => {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+      }
+    });
   };
 
   // --- Toggle Shop ---
@@ -156,20 +174,40 @@ export default function SellerDashboard() {
     setIncomingCall(null);
   };
 
-  // --- End Call (Sends signal + cleans up) ---
+  // --- End Call (With Fallback) ---
   const handleEndCall = () => {
     if (!activeCall) return;
 
-    // ✅ Send end_call signal to server
-    socketRef.current?.send(
-      JSON.stringify({
-        action: "end_call",
-        customer_id: activeCall.customer_id,
-        room_name: activeCall.room,
-      })
-    );
+    console.log("🔚 Seller ending call...");
 
-    // Then clean up UI
+    // Clear any existing fallback
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+    }
+
+    // Send end_call signal
+    const payload = {
+      action: "end_call",
+      customer_id: activeCall.customer_id,
+      room_name: activeCall.room,
+    };
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(payload));
+      console.log("📤 Sent:", payload);
+    } else {
+      console.warn("WebSocket not open, skipping send");
+    }
+
+    // Fallback: Force cleanup in 3s if not already done
+    cleanupTimeoutRef.current = setTimeout(() => {
+      if (activeCall) {
+        console.warn("🔁 Fallback: Cleaning up call (no response)");
+        endCallProperly();
+      }
+    }, 3000);
+
+    // Immediate cleanup
     endCallProperly();
   };
 
@@ -219,7 +257,7 @@ export default function SellerDashboard() {
             serverUrl={LIVEKIT_URL}
             token={livekitToken}
             connect={true}
-            onDisconnected={handleEndCall} // Trigger if LiveKit disconnects
+            onDisconnected={handleEndCall}
             video={true}
             audio={true}
             publishVideo={true}

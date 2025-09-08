@@ -10,6 +10,7 @@ export default function BuyerDashboard() {
   const { user, logout } = useAuth();
   const socketRef = useRef(null);
   const isMounted = useRef(true);
+  const cleanupTimeoutRef = useRef(null); // Prevent double cleanup
 
   const [activeCall, setActiveCall] = useState(null);
   const [livekitToken, setLivekitToken] = useState(null);
@@ -48,6 +49,10 @@ export default function BuyerDashboard() {
         socketRef.current.close();
       }
 
+      if (cleanupTimeoutRef.current) {
+        clearTimeout(cleanupTimeoutRef.current);
+      }
+
       // Cleanup video tracks
       const videos = document.querySelectorAll("video");
       videos.forEach(video => {
@@ -61,9 +66,23 @@ export default function BuyerDashboard() {
 
   // --- Unified Cleanup ---
   const endCallProperly = () => {
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+
     setActiveCall(null);
     setLivekitToken(null);
     toast.dismiss("call");
+
+    // Cleanup video tracks
+    const videos = document.querySelectorAll("video");
+    videos.forEach(video => {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+      }
+    });
   };
 
   const handleBuyNow = (product) => {
@@ -146,17 +165,39 @@ export default function BuyerDashboard() {
     };
   };
 
-  // --- End Call (Send signal + cleanup) ---
+  // --- End Call (With Fallback) ---
   const handleEndCall = () => {
     if (!activeCall) return;
 
-    socketRef.current?.send(
-      JSON.stringify({
-        action: "end_call",
-        customer_id: activeCall.customer_id || user?.id,
-        room_name: activeCall.room,
-      })
-    );
+    console.log("🔚 Buyer ending call...");
+
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+    }
+
+    // Send end_call signal
+    const payload = {
+      action: "end_call",
+      customer_id: activeCall.customer_id || user?.id,
+      room_name: activeCall.room,
+    };
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(payload));
+      console.log("📤 Sent:", payload);
+    } else {
+      console.warn("WebSocket not open, skipping send");
+    }
+
+    // Fallback cleanup
+    cleanupTimeoutRef.current = setTimeout(() => {
+      if (activeCall) {
+        console.warn("🔁 Fallback: Cleaning up call (no response)");
+        endCallProperly();
+      }
+    }, 3000);
+
+    // Immediate cleanup
     endCallProperly();
   };
 
