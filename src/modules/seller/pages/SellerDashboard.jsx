@@ -176,40 +176,34 @@ export default function SellerDashboard() {
 
   // --- End Call (With Fallback) ---
   const handleEndCall = () => {
-    if (!activeCall) return;
+  if (!activeCall) return;
 
-    console.log("🔚 Seller ending call...");
+  console.log("🔚 Seller ending call...");
 
-    // Clear any existing fallback
-    if (cleanupTimeoutRef.current) {
-      clearTimeout(cleanupTimeoutRef.current);
-    }
-
-    // Send end_call signal
-    const payload = {
-      action: "end_call",
-      customer_id: activeCall.customer_id,
-      room_name: activeCall.room,
-    };
-
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(payload));
-      console.log("📤 Sent:", payload);
-    } else {
-      console.warn("WebSocket not open, skipping send");
-    }
-
-    // Fallback: Force cleanup in 3s if not already done
-    cleanupTimeoutRef.current = setTimeout(() => {
-      if (activeCall) {
-        console.warn("🔁 Fallback: Cleaning up call (no response)");
-        endCallProperly();
-      }
-    }, 3000);
-
-    // Immediate cleanup
-    endCallProperly();
+  // Prepare payload
+  const payload = {
+    action: "end_call",
+    customer_id: activeCall.customer_id,
+    room_name: activeCall.room,
   };
+
+  // Send signal to server
+  if (socketRef.current?.readyState === WebSocket.OPEN) {
+    socketRef.current.send(JSON.stringify(payload));
+    console.log("📤 Sent:", payload);
+  } else {
+    console.warn("WebSocket not open, skipping send");
+  }
+
+  // Wait for confirmation OR force cleanup after 3s
+  cleanupTimeoutRef.current = setTimeout(() => {
+    if (activeCall) {
+      console.warn("🔁 Fallback: Cleaning up call (no server response)");
+      endCallProperly();
+    }
+  }, 3000);
+};
+
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
