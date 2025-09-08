@@ -3,10 +3,7 @@ import imagesiphone14pro from "../../../assets/iphone.webp";
 import "./BuyerDashboard.css";
 import { useRef, useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import {
-  LiveKitRoom,
-  VideoConference,
-} from "@livekit/components-react";
+import { LiveKitRoom, VideoConference } from "@livekit/components-react";
 import "@livekit/components-styles";
 
 export default function BuyerDashboard() {
@@ -41,18 +38,66 @@ export default function BuyerDashboard() {
     },
   ];
 
+  // --- WebSocket Setup: Only on Call ---
   useEffect(() => {
-    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      // Close WebSocket on unmount if still open
+      if (socketRef.current && 
+          (socketRef.current.readyState === WebSocket.OPEN || 
+           socketRef.current.readyState === WebSocket.CONNECTING)) {
+        socketRef.current.close();
+      }
+    };
+  }, []);
 
-    console.log("🔌 Connecting buyer WebSocket...");
-    socketRef.current = new WebSocket(WS_URL);
+  // --- Unified Cleanup ---
+  const endCallProperly = () => {
+    setActiveCall(null);
+    setLivekitToken(null);
+    toast.dismiss("call");
+  };
 
-    socketRef.current.onopen = () => {
-      if (!isMounted.current) return;
-      console.log("✅ Buyer: Connected to signaling server");
+  const handleBuyNow = (product) => {
+    alert(`Buying: ${product.name} for ${product.price}`);
+  };
+
+  // --- Call Vendor: Connect WebSocket Only When Needed ---
+  const handleCallVendor = (product) => {
+    if (activeCall) {
+      toast.info("You're already in a call.");
+      return;
+    }
+
+    // Close any existing connection
+    if (socketRef.current) {
+      if (socketRef.current.readyState === WebSocket.OPEN ||
+          socketRef.current.readyState === WebSocket.CONNECTING) {
+        socketRef.current.close();
+      }
+    }
+
+    const payload = {
+      action: "call_request",
+      user_id: product.userId,
+      vendor_id: product.vendorId,
+      product_id: product.productId,
+      customer_name: user?.name || "Unknown Buyer",
     };
 
-    socketRef.current.onmessage = (event) => {
+    toast.loading("🔄 Connecting to server...", { id: "call" });
+
+    const ws = new WebSocket(WS_URL);
+    socketRef.current = ws;
+
+    ws.onopen = () => {
+      if (!isMounted.current) return;
+      console.log("✅ Buyer: Connected to signaling server");
+      ws.send(JSON.stringify(payload));
+      toast.success("📞 Call request sent!");
+    };
+
+    ws.onmessage = (event) => {
       if (!isMounted.current) return;
 
       try {
@@ -83,75 +128,19 @@ export default function BuyerDashboard() {
       }
     };
 
-    socketRef.current.onerror = (err) => {
+    ws.onerror = () => {
       if (!isMounted.current) return;
-      console.error("🚨 WS Error:", err);
-      toast.error("Connection error", { id: "call" });
+      console.error("🚨 WebSocket error");
+      toast.error("⚠️ Failed to connect to server", { id: "call" });
     };
 
-    socketRef.current.onclose = () => {
-      if (!isMounted.current) return;
-      console.log("❌ Buyer WebSocket closed");
+    ws.onclose = () => {
+      console.log("❌ WebSocket closed");
+      // Don't reconnect unless calling again
     };
-
-    return () => {
-      isMounted.current = false;
-      if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
-        socketRef.current.close();
-      }
-    };
-  }, []);
-
-  // --- Unified Call Cleanup ---
-  const endCallProperly = () => {
-    setActiveCall(null);
-    setLivekitToken(null);
-    toast.dismiss("call");
   };
 
-  const handleBuyNow = (product) => {
-    alert(`Buying: ${product.name} for ${product.price}`);
-  };
-
-  const handleCallVendor = (product) => {
-    if (activeCall) {
-      toast.info("You're already in a call.");
-      return;
-    }
-
-    const payload = {
-      action: "call_request",
-      user_id: product.userId,
-      vendor_id: product.vendorId,
-      product_id: product.productId,
-      customer_name: user?.name || "Unknown Buyer",
-    };
-
-    const ws = socketRef.current;
-
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
-      toast.loading("📞 Calling vendor...", { id: "call" });
-    } else if (ws?.readyState === WebSocket.CONNECTING) {
-      toast.loading("📶 Connecting to server...", { id: "call" });
-
-      const interval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          clearInterval(interval);
-          ws.send(JSON.stringify(payload));
-          toast.success("📞 Call request sent!");
-        }
-      }, 500);
-
-      // Stop trying after 3 seconds
-      setTimeout(() => {
-        if (interval) clearInterval(interval);
-      }, 3000);
-    } else {
-      toast.error("⚠️ Not connected to server");
-    }
-  };
-
+  // --- End Call ---
   const handleEndCall = () => {
     if (!activeCall) return;
 
