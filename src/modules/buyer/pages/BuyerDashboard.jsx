@@ -3,83 +3,101 @@ import imagesiphone14pro from "../../../assets/iphone.webp";
 import "./BuyerDashboard.css";
 import { useRef, useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import VideoCall from "../../../components/VideoCall";
+import { LiveKitRoom, VideoConference } from "@livekit/components-react";
+import "@livekit/components-styles";
 
 export default function BuyerDashboard() {
   const { user, logout } = useAuth();
   const socketRef = useRef(null);
-  const [activeCall, setActiveCall] = useState(null);
+  const isMounted = useRef(true);
 
-  const WS_URL = "ws://192.168.0.116:8000/videoCall/ws/room/join";
+  const [activeCall, setActiveCall] = useState(null);
+  const [livekitToken, setLivekitToken] = useState(null);
+
+  const WS_URL = "wss://livestreaming.emeetify.com/videoCall/ws/room/join";
+  const LIVEKIT_URL = "wss://test-project-yjtscd8m.livekit.cloud/";
 
   const products = [
     {
       id: 1,
-      userId: 1,
+      userId: 47,
       name: "iPhone 14 Pro",
       price: "$999",
       image: imagesiphone14pro,
-      vendorPhone: "+1-123-456-7890",
-      vendorId: 2,
+      vendorId: 86,
       productId: 5,
     },
     {
       id: 2,
-      userId: 3,
+      userId: 43,
       name: "MacBook Pro 16",
       price: "$2499",
       image: imagesiphone14pro,
-      vendorPhone: "+1-555-333-2222",
-      vendorId: 2,
+      vendorId: 86,
       productId: 5,
     },
   ];
 
   useEffect(() => {
+    isMounted.current = true;
+    socketRef.current = new WebSocket(WS_URL);
+
+    socketRef.current.onopen = () => {
+      if (isMounted.current) {
+        console.log("✅ Buyer: Connected to signaling server");
+      }
+    };
+
+    socketRef.current.onmessage = (event) => {
+      if (!isMounted.current) return;
+
+      try {
+        const msg = JSON.parse(event.data);
+        console.log("📩 Buyer received:", msg);
+
+        if (msg.event === "request_sent" && msg.vendor_online === false) {
+          toast.error("Vendor is offline. Try later.", { id: "call" });
+        }
+
+        if (msg.event === "request_sent" && msg.reason === "busy") {
+          toast.error("Seller is busy. Try again later.", { id: "call" });
+        }
+
+        if (msg.event === "call_started") {
+          toast.success("📞 Call started!", { id: "call" });
+          setLivekitToken(msg.token);
+          setActiveCall(msg);
+        }
+
+        if (msg.event === "call_ended") {
+          toast.success(`📴 Call ended. Duration: ${msg.duration || 0}s`);
+          endCurrentCall();
+        }
+      } catch (err) {
+        console.error("⚠️ Parse error:", err);
+      }
+    };
+
+    socketRef.current.onerror = (err) => {
+      if (isMounted.current) console.error("🚨 WS Error:", err);
+    };
+
+    socketRef.current.onclose = () => {
+      if (isMounted.current) console.log("❌ Buyer WebSocket closed");
+    };
+
     return () => {
-      if (socketRef.current) {
+      isMounted.current = false;
+      if (socketRef.current?.readyState <= WebSocket.OPEN) {
         socketRef.current.close();
       }
     };
   }, []);
 
-  const connectSocket = (payload) => {
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
-
-    socketRef.current = new WebSocket(WS_URL);
-
-    socketRef.current.onopen = () => {
-      console.log("✅ Connected to WebSocket (Buyer side)");
-      socketRef.current.send(JSON.stringify(payload));
-    };
-
-    socketRef.current.onmessage = (event) => {
-      console.log("📩 Message from server:", event.data);
-
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (msg.event === "request_sent" && msg.vendor_online === false) {
-          toast.error(msg.message || "Vendor is offline, please try later.");
-        }
-
-        if (msg.event === "call_started") {
-          setActiveCall(msg);
-          toast.success("📞 Call started!");
-        }
-
-        if (msg.event === "call_ended") {
-          toast.success(
-            `📴 Call ended. Duration: ${msg.duration || 0} seconds`
-          );
-          setActiveCall(null); // reset UI back to product list
-        }
-      } catch (err) {
-        console.error("⚠️ Failed to parse message:", err);
-      }
-    };
+  const endCurrentCall = () => {
+    setActiveCall(null);
+    setLivekitToken(null);
+    toast.dismiss("call");
   };
 
   const handleBuyNow = (product) => {
@@ -87,28 +105,38 @@ export default function BuyerDashboard() {
   };
 
   const handleCallVendor = (product) => {
+    if (activeCall) {
+      toast.info("You're already in a call.");
+      return;
+    }
+
     const payload = {
+      action: "call_request",
       user_id: product.userId,
       vendor_id: product.vendorId,
       product_id: product.productId,
+      customer_name: user?.name || "Unknown Buyer",
     };
 
-    connectSocket(payload);
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(payload));
+      toast.loading("📞 Calling vendor...", { id: "call" });
+    } else {
+      toast.error("⚠️ Not connected to server");
+    }
   };
 
-  // 🔴 End Call manually
   const handleEndCall = () => {
     if (!activeCall) return;
 
-    const payload = {
-      action: "end_call",
-      customer_id: activeCall.customer_id || user?.id,
-      room_name: activeCall.room,
-    };
-
-    socketRef.current?.send(JSON.stringify(payload));
-    toast.success("You ended the call");
-    setActiveCall(null);
+    socketRef.current?.send(
+      JSON.stringify({
+        action: "end_call",
+        customer_id: activeCall.customer_id || user?.id,
+        room_name: activeCall.room,
+      })
+    );
+    endCurrentCall();
   };
 
   return (
@@ -124,19 +152,17 @@ export default function BuyerDashboard() {
         </button>
       </div>
 
+      {/* Product Grid or Active Call */}
       {!activeCall ? (
         <div className="product-grid">
           {products.map((product) => (
             <div key={product.id} className="product-card">
               <img src={product.image} alt={product.name} />
-
               <h2>{product.name}</h2>
               <p>{product.price}</p>
-
               <button onClick={() => handleBuyNow(product)} className="buy-btn">
                 Buy Now
               </button>
-
               <button
                 onClick={() => handleCallVendor(product)}
                 className="call-btn"
@@ -148,12 +174,34 @@ export default function BuyerDashboard() {
         </div>
       ) : (
         <div className="active-call-ui">
-            <h2 className="text-center mb-2">📞 In Call</h2>
-            <VideoCall
-            token={activeCall.token}   // 🔑 must come from backend
-            roomName={activeCall.room}
-            onDisconnected={handleEndCall}
-            />
+          {livekitToken ? (
+            <>
+              <h2 className="text-xl font-semibold">📞 In Call with Seller</h2>
+
+              <LiveKitRoom
+                serverUrl={LIVEKIT_URL}
+                token={livekitToken}
+                connect={true}
+                onDisconnected={handleEndCall}
+                video={true}
+                audio={true}
+                publishVideo={true}
+                publishAudio={true}
+                style={{ height: "600px" }}
+              >
+                <VideoConference />
+              </LiveKitRoom>
+
+              <button
+                onClick={handleEndCall}
+                className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg"
+              >
+                End Call
+              </button>
+            </>
+          ) : (
+            <p>Connecting to call...</p>
+          )}
         </div>
       )}
     </div>

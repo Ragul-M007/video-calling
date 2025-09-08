@@ -1,4 +1,4 @@
-import PropTypes from "prop-types";
+// src/components/VideoCall.jsx
 import {
   LiveKitRoom,
   GridLayout,
@@ -19,62 +19,28 @@ export default function VideoCall({ token, roomName, onDisconnected }) {
   }, [connected, roomName]);
 
   return (
-    <div
-      style={{
-        height: "80vh",
-        width: "100%",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
+    <div style={{ height: "100vh", width: "100%" }}>
       <LiveKitRoom
         token={token}
-        serverUrl="wss://test-project-yjtscd8m.livekit.cloud"
+        serverUrl="wss://test-project-yjtscd8m.livekit.cloud" // 👈 LiveKit server
         roomName={roomName}
         connect
-        audio={{
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true,
-        }}
-        video={{ facingMode: "user" }}
+        audio
+        video
         onConnected={() => setConnected(true)}
         onDisconnected={onDisconnected}
       >
         <OneToOneUI />
       </LiveKitRoom>
-
-      {/* 🔴 End Call Button */}
-      <div style={{ textAlign: "center", marginTop: "10px" }}>
-        <button
-          onClick={onDisconnected}
-          style={{
-            padding: "10px 20px",
-            backgroundColor: "#e63946",
-            color: "#fff",
-            border: "none",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontSize: "16px",
-          }}
-        >
-          End Call
-        </button>
-      </div>
     </div>
   );
 }
 
-VideoCall.propTypes = {
-  token: PropTypes.string.isRequired,
-  roomName: PropTypes.string.isRequired,
-  onDisconnected: PropTypes.func.isRequired,
-};
-
+/**
+ * One-to-one call layout
+ */
 function OneToOneUI() {
-  const tracks = useTracks([
-    { source: Track.Source.Camera, withPlaceholder: true },
-  ]);
+  const tracks = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }]);
 
   return (
     <GridLayout

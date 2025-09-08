@@ -10,118 +10,151 @@ import {
   Typography,
 } from "@mui/material";
 import toast from "react-hot-toast";
-import VideoCall from "../../../components/VideoCall";
+import {
+  LiveKitRoom,
+  VideoConference,
+} from "@livekit/components-react";
+import "@livekit/components-styles";
 
 export default function SellerDashboard() {
   const { user, logout } = useAuth();
   const socketRef = useRef(null);
 
-  const [isShopOpen, setIsShopOpen] = useState(
-    () => sessionStorage.getItem("isShopOpen") === "true"
-  );
+  const [isShopOpen, setIsShopOpen] = useState(() => sessionStorage.getItem("isShopOpen") === "true");
   const [incomingCall, setIncomingCall] = useState(null);
-  const [activeCall, setActiveCall] = useState(null); // new state
+  const [activeCall, setActiveCall] = useState(null);
+  const [livekitToken, setLivekitToken] = useState(null);
 
-  const WS_URL = "ws://192.168.0.116:8000/videoCall/ws/room/join";
+  const WS_URL = "wss://livestreaming.emeetify.com/videoCall/ws/room/join";
+  const LIVEKIT_URL = "wss://test-project-yjtscd8m.livekit.cloud/";
 
+  // --- WebSocket & Call Management ---
   useEffect(() => {
-  sessionStorage.setItem("isShopOpen", isShopOpen);
+    sessionStorage.setItem("isShopOpen", isShopOpen);
 
-  const localPayload = {
-    user_id: 2,
-    vendor_id: 2,
-    product_id: 5,
-  };
+    if (isShopOpen) {
+      console.log("🔌 Opening WebSocket connection...");
+      socketRef.current = new WebSocket(WS_URL);
 
-  if (isShopOpen) {
-    socketRef.current = new WebSocket(WS_URL);
+      socketRef.current.onopen = () => {
+        console.log("✅ Seller: Connected to WebSocket");
+        toast.success("Shop is online. Waiting for buyers...");
+        socketRef.current.send(
+          JSON.stringify({
+            user_id: 86,
+            vendor_id: 86,
+            product_id: 5,
+          })
+        );
+      };
 
-    socketRef.current.onopen = () => {
-      console.log("✅ Connected to WebSocket");
-      toast.success("Shop is online. Waiting for buyers...");
-      socketRef.current.send(JSON.stringify(localPayload));
-    };
+      socketRef.current.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          console.log("📩 Seller received:", msg);
 
-    socketRef.current.onmessage = (event) => {
-      console.log("📩 Message from server:", event.data);
-      try {
-        const msg = JSON.parse(event.data);
+          // Block new calls if already in one
+          if (activeCall) {
+            if (msg.event === "call_request") {
+              console.log("📞 Busy: Rejecting new call from", msg.customer_name);
+              socketRef.current?.send(
+                JSON.stringify({
+                  action: "reject_call",
+                  customer_id: msg.customer_id,
+                  reason: "busy",
+                })
+              );
+              toast.info(`${msg.customer_name} was rejected — already in a call.`);
+            }
+            return;
+          }
 
-        if (msg.event === "call_request" && msg.is_incoming_call) {
-          setIncomingCall(msg);
-          toast.success(`Incoming call from ${msg.customer_name}`);
+          if (msg.event === "call_request" && msg.is_incoming_call) {
+            setIncomingCall(msg);
+            toast.success(`📞 Incoming call from ${msg.customer_name}`);
+          }
+
+          if (msg.event === "call_started") {
+            toast.success("📞 Call started!");
+            setLivekitToken(msg.token);
+            setActiveCall(msg);
+            setIncomingCall(null); // Clear any pending
+          }
+
+          if (msg.event === "call_ended") {
+            toast.success(`📴 Call ended. Duration: ${msg.duration || 0}s`);
+            endCurrentCall();
+          }
+        } catch (err) {
+          console.error("⚠️ Parse error:", err);
         }
+      };
 
-        if (msg.event === "call_started") {
-          setActiveCall(msg);
-          toast.success("📞 Call started!");
-        }
-      } catch (err) {
-        console.error("⚠️ Failed to parse server message:", err);
-      }
-    };
-
-    socketRef.current.onclose = () => {
-      console.log("❌ WebSocket closed");
-      toast("Connection closed", { icon: "🔌" });
-    };
-  } else if (socketRef.current) {
-    socketRef.current.close();
-    socketRef.current = null;
-  }
-
-  return () => {
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
+      socketRef.current.onclose = () => console.log("❌ WebSocket closed");
+      socketRef.current.onerror = (err) => console.error("🚨 WS Error:", err);
+    } else {
+      socketRef.current?.close();
     }
+
+    return () => {
+      socketRef.current?.close();
+      if (activeCall) endCurrentCall();
+    };
+  }, [isShopOpen, activeCall]); // Re-run when shop status or call changes
+
+  // --- End Call Helper ---
+  const endCurrentCall = () => {
+    setActiveCall(null);
+    setLivekitToken(null);
+    setIncomingCall(null);
   };
-}, [isShopOpen]);
 
-
+  // --- Toggle Shop ---
   const toggleShop = () => {
+    if (activeCall) {
+      toast.error("❌ Cannot close shop during an active call.");
+      return;
+    }
     setIsShopOpen((prev) => !prev);
   };
 
+  // --- Call Actions ---
   const handleAccept = () => {
     if (!incomingCall) return;
 
-    const payload = {
-      action: "accept_call",
-      customer_id: incomingCall.customer_id,
-    };
-
-    socketRef.current?.send(JSON.stringify(payload));
-    toast.success(`Accepted call from ${incomingCall.customer_name}`);
+    socketRef.current?.send(
+      JSON.stringify({
+        action: "accept_call",
+        customer_id: incomingCall.customer_id,
+      })
+    );
     setIncomingCall(null);
   };
 
   const handleReject = () => {
     if (!incomingCall) return;
 
-    const payload = {
-      action: "reject_call",
-      customer_id: incomingCall.customer_id,
-    };
-
-    socketRef.current?.send(JSON.stringify(payload));
-    toast.error(`Rejected call from ${incomingCall.customer_name}`);
+    socketRef.current?.send(
+      JSON.stringify({
+        action: "reject_call",
+        customer_id: incomingCall.customer_id,
+      })
+    );
+    toast.error(`Call from ${incomingCall.customer_name} rejected`);
     setIncomingCall(null);
   };
 
-  // 🔴 End Call
   const handleEndCall = () => {
     if (!activeCall) return;
 
-    const payload = {
-      action: "end_call",
-      customer_id: activeCall.customer_id,
-      room_name: activeCall.room,
-    };
-
-    socketRef.current?.send(JSON.stringify(payload));
-    toast.success("Call ended successfully");
-    setActiveCall(null);
+    socketRef.current?.send(
+      JSON.stringify({
+        action: "end_call",
+        customer_id: activeCall.customer_id,
+        room_name: activeCall.room,
+      })
+    );
+    endCurrentCall();
   };
 
   return (
@@ -162,14 +195,30 @@ export default function SellerDashboard() {
       )}
 
       {/* Active Call UI */}
-      {activeCall && (
-        <div className="active-call-ui">
-          <h2 className="text-center mb-2">📞 Live Call</h2>
-          <VideoCall
-            token={activeCall.token} // 🔑 must come from backend
-            roomName={activeCall.room}
+      {activeCall && livekitToken && (
+        <div className="max-w-5xl mx-auto mt-6">
+          <h2 className="text-xl font-semibold mb-2">📞 In Call with {activeCall.customer_name}</h2>
+
+          <LiveKitRoom
+            serverUrl={LIVEKIT_URL}
+            token={livekitToken}
+            connect={true}
             onDisconnected={handleEndCall}
-          />
+            video={true}
+            audio={true}
+            publishVideo={true}
+            publishAudio={true}
+            style={{ height: "600px" }}
+          >
+            <VideoConference />
+          </LiveKitRoom>
+
+          <button
+            onClick={handleEndCall}
+            className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg"
+          >
+            End Call
+          </button>
         </div>
       )}
 
@@ -178,7 +227,7 @@ export default function SellerDashboard() {
         <DialogTitle>📞 Incoming Call</DialogTitle>
         <DialogContent>
           <Typography>
-            Customer <b>{incomingCall?.customer_name}</b> is calling about{" "}
+            Customer <b>{incomingCall?.customer_name}</b> wants to talk about{" "}
             <b>Product #{incomingCall?.product_id}</b>.
           </Typography>
         </DialogContent>
