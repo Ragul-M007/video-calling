@@ -3,7 +3,10 @@ import imagesiphone14pro from "../../../assets/iphone.webp";
 import "./BuyerDashboard.css";
 import { useRef, useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { LiveKitRoom, VideoConference } from "@livekit/components-react";
+import {
+  LiveKitRoom,
+  VideoConference,
+} from "@livekit/components-react";
 import "@livekit/components-styles";
 
 export default function BuyerDashboard() {
@@ -40,12 +43,13 @@ export default function BuyerDashboard() {
 
   useEffect(() => {
     isMounted.current = true;
+
+    console.log("🔌 Connecting buyer WebSocket...");
     socketRef.current = new WebSocket(WS_URL);
 
     socketRef.current.onopen = () => {
-      if (isMounted.current) {
-        console.log("✅ Buyer: Connected to signaling server");
-      }
+      if (!isMounted.current) return;
+      console.log("✅ Buyer: Connected to signaling server");
     };
 
     socketRef.current.onmessage = (event) => {
@@ -64,6 +68,7 @@ export default function BuyerDashboard() {
         }
 
         if (msg.event === "call_started") {
+          toast.dismiss("call");
           toast.success("📞 Call started!", { id: "call" });
           setLivekitToken(msg.token);
           setActiveCall(msg);
@@ -71,7 +76,7 @@ export default function BuyerDashboard() {
 
         if (msg.event === "call_ended") {
           toast.success(`📴 Call ended. Duration: ${msg.duration || 0}s`);
-          endCurrentCall();
+          endCallProperly();
         }
       } catch (err) {
         console.error("⚠️ Parse error:", err);
@@ -79,22 +84,26 @@ export default function BuyerDashboard() {
     };
 
     socketRef.current.onerror = (err) => {
-      if (isMounted.current) console.error("🚨 WS Error:", err);
+      if (!isMounted.current) return;
+      console.error("🚨 WS Error:", err);
+      toast.error("Connection error", { id: "call" });
     };
 
     socketRef.current.onclose = () => {
-      if (isMounted.current) console.log("❌ Buyer WebSocket closed");
+      if (!isMounted.current) return;
+      console.log("❌ Buyer WebSocket closed");
     };
 
     return () => {
       isMounted.current = false;
-      if (socketRef.current?.readyState <= WebSocket.OPEN) {
+      if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
         socketRef.current.close();
       }
     };
   }, []);
 
-  const endCurrentCall = () => {
+  // --- Unified Call Cleanup ---
+  const endCallProperly = () => {
     setActiveCall(null);
     setLivekitToken(null);
     toast.dismiss("call");
@@ -118,9 +127,26 @@ export default function BuyerDashboard() {
       customer_name: user?.name || "Unknown Buyer",
     };
 
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(payload));
+    const ws = socketRef.current;
+
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
       toast.loading("📞 Calling vendor...", { id: "call" });
+    } else if (ws?.readyState === WebSocket.CONNECTING) {
+      toast.loading("📶 Connecting to server...", { id: "call" });
+
+      const interval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          clearInterval(interval);
+          ws.send(JSON.stringify(payload));
+          toast.success("📞 Call request sent!");
+        }
+      }, 500);
+
+      // Stop trying after 3 seconds
+      setTimeout(() => {
+        if (interval) clearInterval(interval);
+      }, 3000);
     } else {
       toast.error("⚠️ Not connected to server");
     }
@@ -136,7 +162,7 @@ export default function BuyerDashboard() {
         room_name: activeCall.room,
       })
     );
-    endCurrentCall();
+    endCallProperly();
   };
 
   return (

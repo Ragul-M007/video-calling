@@ -33,6 +33,12 @@ export default function SellerDashboard() {
     sessionStorage.setItem("isShopOpen", isShopOpen);
 
     if (isShopOpen) {
+      // Prevent duplicate WebSocket
+      if (socketRef.current && socketRef.current.readyState !== WebSocket.CLOSED) {
+        console.log("WebSocket already connected or connecting");
+        return;
+      }
+
       console.log("🔌 Opening WebSocket connection...");
       socketRef.current = new WebSocket(WS_URL);
 
@@ -78,35 +84,53 @@ export default function SellerDashboard() {
             toast.success("📞 Call started!");
             setLivekitToken(msg.token);
             setActiveCall(msg);
-            setIncomingCall(null); // Clear any pending
+            setIncomingCall(null);
           }
 
           if (msg.event === "call_ended") {
             toast.success(`📴 Call ended. Duration: ${msg.duration || 0}s`);
-            endCurrentCall();
+            endCallProperly();
           }
         } catch (err) {
           console.error("⚠️ Parse error:", err);
         }
       };
 
-      socketRef.current.onclose = () => console.log("❌ WebSocket closed");
-      socketRef.current.onerror = (err) => console.error("🚨 WS Error:", err);
+      socketRef.current.onclose = () => {
+        console.log("❌ WebSocket closed");
+      };
+
+      socketRef.current.onerror = (err) => {
+        console.error("🚨 WS Error:", err);
+      };
     } else {
       socketRef.current?.close();
     }
 
     return () => {
       socketRef.current?.close();
-      if (activeCall) endCurrentCall();
+      if (activeCall) endCallProperly();
     };
-  }, [isShopOpen, activeCall]); // Re-run when shop status or call changes
+  }, [isShopOpen, activeCall]);
 
-  // --- End Call Helper ---
-  const endCurrentCall = () => {
+  // --- Unified Call Cleanup ---
+  const endCallProperly = () => {
+    // Notify server only if we haven't already
+    if (activeCall && socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(
+        JSON.stringify({
+          action: "end_call",
+          customer_id: activeCall.customer_id,
+          room_name: activeCall.room,
+        })
+      );
+    }
+
+    // Reset state
     setActiveCall(null);
     setLivekitToken(null);
     setIncomingCall(null);
+    toast.dismiss("call");
   };
 
   // --- Toggle Shop ---
@@ -145,16 +169,7 @@ export default function SellerDashboard() {
   };
 
   const handleEndCall = () => {
-    if (!activeCall) return;
-
-    socketRef.current?.send(
-      JSON.stringify({
-        action: "end_call",
-        customer_id: activeCall.customer_id,
-        room_name: activeCall.room,
-      })
-    );
-    endCurrentCall();
+    endCallProperly(); // Reuse same logic
   };
 
   return (
