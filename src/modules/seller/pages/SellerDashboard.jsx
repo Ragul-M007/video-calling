@@ -113,20 +113,8 @@ export default function SellerDashboard() {
     };
   }, [isShopOpen, activeCall]);
 
-  // --- Unified Call Cleanup ---
+  // --- Unified Call Cleanup (UI only) ---
   const endCallProperly = () => {
-    // Notify server only if we haven't already
-    if (activeCall && socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(
-        JSON.stringify({
-          action: "end_call",
-          customer_id: activeCall.customer_id,
-          room_name: activeCall.room,
-        })
-      );
-    }
-
-    // Reset state
     setActiveCall(null);
     setLivekitToken(null);
     setIncomingCall(null);
@@ -168,8 +156,21 @@ export default function SellerDashboard() {
     setIncomingCall(null);
   };
 
+  // --- End Call (Sends signal + cleans up) ---
   const handleEndCall = () => {
-    endCallProperly(); // Reuse same logic
+    if (!activeCall) return;
+
+    // ✅ Send end_call signal to server
+    socketRef.current?.send(
+      JSON.stringify({
+        action: "end_call",
+        customer_id: activeCall.customer_id,
+        room_name: activeCall.room,
+      })
+    );
+
+    // Then clean up UI
+    endCallProperly();
   };
 
   return (
@@ -218,7 +219,7 @@ export default function SellerDashboard() {
             serverUrl={LIVEKIT_URL}
             token={livekitToken}
             connect={true}
-            onDisconnected={handleEndCall}
+            onDisconnected={handleEndCall} // Trigger if LiveKit disconnects
             video={true}
             audio={true}
             publishVideo={true}

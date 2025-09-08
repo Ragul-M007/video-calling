@@ -38,16 +38,24 @@ export default function BuyerDashboard() {
     },
   ];
 
-  // --- WebSocket Setup: Only on Call ---
+  // --- Cleanup on unmount ---
   useEffect(() => {
     return () => {
       isMounted.current = false;
-      // Close WebSocket on unmount if still open
       if (socketRef.current && 
           (socketRef.current.readyState === WebSocket.OPEN || 
            socketRef.current.readyState === WebSocket.CONNECTING)) {
         socketRef.current.close();
       }
+
+      // Cleanup video tracks
+      const videos = document.querySelectorAll("video");
+      videos.forEach(video => {
+        if (video.srcObject) {
+          video.srcObject.getTracks().forEach(track => track.stop());
+          video.srcObject = null;
+        }
+      });
     };
   }, []);
 
@@ -70,11 +78,10 @@ export default function BuyerDashboard() {
     }
 
     // Close any existing connection
-    if (socketRef.current) {
-      if (socketRef.current.readyState === WebSocket.OPEN ||
-          socketRef.current.readyState === WebSocket.CONNECTING) {
-        socketRef.current.close();
-      }
+    if (socketRef.current && 
+        (socketRef.current.readyState === WebSocket.OPEN || 
+         socketRef.current.readyState === WebSocket.CONNECTING)) {
+      socketRef.current.close();
     }
 
     const payload = {
@@ -136,11 +143,10 @@ export default function BuyerDashboard() {
 
     ws.onclose = () => {
       console.log("❌ WebSocket closed");
-      // Don't reconnect unless calling again
     };
   };
 
-  // --- End Call ---
+  // --- End Call (Send signal + cleanup) ---
   const handleEndCall = () => {
     if (!activeCall) return;
 
@@ -153,6 +159,20 @@ export default function BuyerDashboard() {
     );
     endCallProperly();
   };
+
+  // --- Auto cleanup video tracks when call ends ---
+  useEffect(() => {
+    if (!activeCall) {
+      const videos = document.querySelectorAll("video");
+      videos.forEach(video => {
+        if (video.srcObject) {
+          const tracks = video.srcObject.getTracks();
+          tracks.forEach(track => track.stop());
+          video.srcObject = null;
+        }
+      });
+    }
+  }, [activeCall]);
 
   return (
     <div className="buyer-dashboard">
